@@ -19,9 +19,14 @@ data/raw/*.xlsx
 data/processed/*.csv
 data/external/
 
+# Weather cache
+data/raw/weather_cache.csv
+
 # Models
 models/*.pkl
 models/*.joblib
+models/**/*.joblib
+models/**/*.json
 
 # IDE
 .vscode/
