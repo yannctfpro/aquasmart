@@ -72,8 +72,8 @@ def preprocess_crop(crop_key: str):
     test[FEATURE_COLS] = scaler.transform(test[FEATURE_COLS])
 
     # Apply same scaling to irrigation subsets
-    train_irr[FEATURE_COLS] = scaler.transform(train_irr[FEATURE_COLS].values)
-    test_irr[FEATURE_COLS] = scaler.transform(test_irr[FEATURE_COLS].values)
+    train_irr[FEATURE_COLS] = scaler.transform(train_irr[FEATURE_COLS])
+    test_irr[FEATURE_COLS] = scaler.transform(test_irr[FEATURE_COLS])
 
     # Create output directories
     crop_processed_dir = PROCESSED_DIR / crop_key

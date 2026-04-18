@@ -45,6 +45,29 @@ pip install -r requirements.txt
 jupyter notebook notebooks/01_eda.ipynb
 ```
 
+## Run AquaSmart
+
+Local Streamlit mode uses the shared inference engine directly:
+
+```bash
+streamlit run streamlit_app.py
+```
+
+FastAPI mode is also available if you want the UI to call the backend over HTTP:
+
+```bash
+uvicorn src.api.main:app --reload --port 8000
+streamlit run streamlit_app.py
+```
+
+If model artifacts are missing, rebuild them with:
+
+```bash
+python src/data/collect_data_v2.py
+python src/data/preprocess_v2.py
+python src/models/train_v2.py
+```
+
 ## Data Sources
 
 | Category | Source | Resolution | Access |
