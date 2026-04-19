@@ -17,6 +17,7 @@ env/
 data/raw/*.csv
 data/raw/*.xlsx
 data/processed/*.csv
+data/processed/**/*.csv
 data/external/
 
 # Weather cache
