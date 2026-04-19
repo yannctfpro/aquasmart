@@ -4,12 +4,13 @@ from typing import Any
 from urllib.parse import quote
 
 import pandas as pd
-import plotly.express as px
 import requests
 import streamlit as st
 
 from src.core.recommendation_engine import (
+    CLUSTER_NAMES,
     CROP_DISPLAY_NAMES,
+    CROPS,
     GROWTH_STAGE_ENCODING,
     ModelNotReadyError,
     SUPPORTED_CROPS,
@@ -24,8 +25,26 @@ st.set_page_config(page_title="AquaSmart", page_icon="💧", layout="wide", init
 
 RUNTIME_OPTIONS = ("Local engine", "FastAPI backend")
 DEFAULT_API_URL = "http://127.0.0.1:8000"
-CROP_EMOJIS = {"winter_wheat": "🌾", "corn": "🌽", "barley": "🌿", "rapeseed": "🌼", "sunflower": "🌻"}
-CROP_SEASONS = {"winter_wheat": "Oct → Jul", "corn": "Apr → Sep", "barley": "Oct → Jun", "rapeseed": "Sep → Jul", "sunflower": "Apr → Sep"}
+
+# Crop emojis covering all 15 crops
+CROP_EMOJIS = {
+    "winter_wheat": "🌾", "durum_wheat": "🌾", "winter_barley": "🌿", "oats": "🌾", "triticale": "🌾",
+    "corn": "🌽", "sunflower": "🌻", "sorghum": "🌾", "soybean": "🫘",
+    "rapeseed": "🌼", "winter_pea": "🫛", "faba_bean": "🫛",
+    "potato": "🥔", "sugar_beet": "🥕", "field_vegetables": "🥬",
+}
+
+# Rough season display — derived from sowing month + expected harvest
+CROP_SEASONS = {
+    "winter_wheat": "Oct → Jul", "durum_wheat": "Oct → Jul", "winter_barley": "Oct → Jun",
+    "oats": "Oct → Jun", "triticale": "Oct → Jul",
+    "corn": "Apr → Sep", "sunflower": "Apr → Sep", "sorghum": "May → Oct", "soybean": "May → Oct",
+    "rapeseed": "Sep → Jul", "winter_pea": "Nov → Jun", "faba_bean": "Nov → Jun",
+    "potato": "Apr → Sep", "sugar_beet": "Mar → Oct", "field_vegetables": "Apr → Oct",
+}
+
+# Sort crops alphabetically by display name for the dropdown
+SORTED_CROPS = sorted(SUPPORTED_CROPS, key=lambda c: CROP_DISPLAY_NAMES.get(c, c))
 
 
 def svg_to_uri(svg: str) -> str:
@@ -174,8 +193,8 @@ def inject_styles() -> None:
         .step-label {{ color:var(--water); text-transform:uppercase; letter-spacing:.13em; font-size:.72rem; margin-bottom:.25rem; }}
         .field-notes {{ position:relative; overflow:hidden; }} .field-notes::after {{ content:""; position:absolute; right:-20px; top:-14px; width:150px; height:150px; background:radial-gradient(circle, rgba(255,214,92,.3), rgba(255,214,92,0) 70%); }}
         .status-good {{ color:var(--teal); font-weight:600; }} .status-warn {{ color:var(--alert); font-weight:600; }}
-        @media (max-width:1100px) {{ .hero-grid {{ grid-template-columns:1fr; }} .crop-gallery {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .result-copy,.result-chips,.story-copy {{ max-width:100%; }} }}
-        @media (max-width:760px) {{ .crop-gallery {{ grid-template-columns:1fr; }} .hero-shell {{ padding:22px 20px; }} .hero-art {{ min-height:240px; }} }}
+        @media (max-width:1100px) {{ .hero-grid {{ grid-template-columns:1fr; }} .crop-gallery {{ grid-template-columns:repeat(3,minmax(0,1fr)); }} .result-copy,.result-chips,.story-copy {{ max-width:100%; }} }}
+        @media (max-width:760px) {{ .crop-gallery {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .hero-shell {{ padding:22px 20px; }} .hero-art {{ min-height:240px; }} }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -200,23 +219,34 @@ def format_crop_name(crop_key: str) -> str:
     return CROP_DISPLAY_NAMES.get(crop_key, crop_key.replace("_", " ").title())
 
 
+def format_crop_label(crop_key: str) -> str:
+    """Dropdown label: emoji + name + cluster tag."""
+    cluster = CROPS[crop_key]["cluster"]
+    return f"{CROP_EMOJIS.get(crop_key, '🌱')} {format_crop_name(crop_key)} — Cluster {cluster}"
+
+
 def build_runtime_snapshot(runtime_mode: str, api_url: str) -> tuple[dict[str, Any], list[dict[str, Any]], str | None]:
     if runtime_mode == "Local engine":
         return get_model_status(), get_model_info(), None
     try:
         return fetch_backend_health(api_url), fetch_backend_model_info(api_url), None
     except requests.RequestException as exc:
-        return {"loaded_crops": [], "missing_crops": SUPPORTED_CROPS, "model_errors": {}, "crops_total": len(SUPPORTED_CROPS)}, [], str(exc)
+        return (
+            {"loaded_crops": [], "missing_crops": SUPPORTED_CROPS, "cluster_errors": {}, "crops_total": len(SUPPORTED_CROPS)},
+            [],
+            str(exc),
+        )
 
 
-def recommendation_via_backend(api_url: str, city: str, surface_hectares: float, crop: str, growth_stage: str | None) -> dict[str, Any]:
-    payload = {"city": city, "surface_hectares": surface_hectares, "crop": crop, "growth_stage": growth_stage}
-    response = requests.post(f"{api_url.rstrip('/')}/recommend", json=payload, timeout=20)
+def recommendation_via_backend(api_url: str, **kwargs: Any) -> dict[str, Any]:
+    response = requests.post(f"{api_url.rstrip('/')}/recommend", json=kwargs, timeout=20)
     response.raise_for_status()
     return response.json()
 
 
 def render_hero(runtime_mode: str, loaded_count: int, total_count: int, selected_crop: str) -> None:
+    cluster_id = CROPS[selected_crop]["cluster"]
+    cluster_label = CLUSTER_NAMES.get(cluster_id, f"Cluster {cluster_id}")
     st.markdown(
         f"""
         <section class="hero-shell">
@@ -225,18 +255,19 @@ def render_hero(runtime_mode: str, loaded_count: int, total_count: int, selected
                     <div class="hero-kicker">Smart Irrigation For Small Farms</div>
                     <h1 class="hero-title">AquaSmart Farm Companion</h1>
                     <div class="hero-copy">
-                        The irrigation logic stays exactly the same, but the interface now feels closer to a real farmer app:
-                        warmer colors, field scenery, crop presence, sunlight, and calmer operational guidance.
+                        Data-driven irrigation decisions for 15 French crops grouped into 4 agronomic clusters.
+                        One ML model per cluster replaces per-crop training while keeping crop-specific features
+                        like Kc coefficients and soil water capacity.
                     </div>
                     <div class="chip-row">
                         <div class="chip">Runtime: {runtime_mode}</div>
-                        <div class="chip">Models ready: {loaded_count}/{total_count}</div>
-                        <div class="chip">Focus crop: {CROP_EMOJIS.get(selected_crop, "🌱")} {format_crop_name(selected_crop)}</div>
+                        <div class="chip">Clusters ready: {loaded_count}/{total_count}</div>
+                        <div class="chip">Focus: {CROP_EMOJIS.get(selected_crop, "🌱")} {format_crop_name(selected_crop)} — {cluster_label}</div>
                     </div>
                 </div>
                 <div class="hero-art">
                     <div class="art-note"><strong>Field mood</strong><br>Farm rows, sunrise tones, crop symbols, and a softer agricultural visual language.</div>
-                    <div class="art-footer">France coverage for wheat, corn, barley, rapeseed, and sunflower.</div>
+                    <div class="art-footer">France coverage across 15 crops in 4 agronomic clusters.</div>
                 </div>
             </div>
         </section>
@@ -246,33 +277,64 @@ def render_hero(runtime_mode: str, loaded_count: int, total_count: int, selected
 
 
 def render_status_cards(status: dict[str, Any], runtime_mode: str, runtime_error: str | None) -> None:
-    loaded_count = len(status.get("loaded_crops", []))
-    total_count = status.get("crops_total", len(SUPPORTED_CROPS))
-    missing_count = len(status.get("missing_crops", []))
+    loaded_clusters = status.get("loaded_clusters", [])
+    total_clusters = status.get("clusters_total", 4)
+    loaded_count = len(loaded_clusters)
+    missing_count = total_clusters - loaded_count
+
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown(f'<div class="mini-card"><div class="metric-label">Runtime</div><div class="metric-value">{runtime_mode}</div><div class="metric-copy">Same recommendation flow, wrapped in a more farmer-facing experience.</div></div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="mini-card"><div class="metric-label">Runtime</div>'
+            f'<div class="metric-value">{runtime_mode}</div>'
+            f'<div class="metric-copy">One recommendation engine, shared by Streamlit and FastAPI.</div></div>',
+            unsafe_allow_html=True,
+        )
     with col2:
-        st.markdown(f'<div class="mini-card"><div class="metric-label">Model Readiness</div><div class="metric-value">{loaded_count}/{total_count}</div><div class="metric-copy">Missing bundles: {missing_count}.</div></div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="mini-card"><div class="metric-label">Model Readiness</div>'
+            f'<div class="metric-value">{loaded_count}/{total_clusters}</div>'
+            f'<div class="metric-copy">Cluster bundles missing: {missing_count}.</div></div>',
+            unsafe_allow_html=True,
+        )
     with col3:
-        status_label = "Healthy" if loaded_count else "Waiting for models"
-        status_class = "status-good" if loaded_count else "status-warn"
+        status_label = "Healthy" if loaded_count == total_clusters else "Waiting for models"
+        status_class = "status-good" if loaded_count == total_clusters else "status-warn"
         runtime_copy = runtime_error or "Live weather still comes from Open-Meteo at request time."
-        st.markdown(f'<div class="mini-card"><div class="metric-label">System Status</div><div class="metric-value {status_class}">{status_label}</div><div class="metric-copy">{runtime_copy}</div></div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="mini-card"><div class="metric-label">System Status</div>'
+            f'<div class="metric-value {status_class}">{status_label}</div>'
+            f'<div class="metric-copy">{runtime_copy}</div></div>',
+            unsafe_allow_html=True,
+        )
 
 
 def render_crop_showcase(active_crop: str) -> None:
     cards = []
-    for crop in SUPPORTED_CROPS:
+    for crop in SORTED_CROPS:
         active_class = " active" if crop == active_crop else ""
+        cluster_id = CROPS[crop]["cluster"]
         cards.append(
-            f'<div class="crop-tile{active_class}"><div class="crop-emoji">{CROP_EMOJIS.get(crop, "🌱")}</div><div class="crop-name">{format_crop_name(crop)}</div><div class="crop-season">Season {CROP_SEASONS[crop]}</div><div class="crop-chip">Crop-specific ML route</div></div>'
+            f'<div class="crop-tile{active_class}">'
+            f'<div class="crop-emoji">{CROP_EMOJIS.get(crop, "🌱")}</div>'
+            f'<div class="crop-name">{format_crop_name(crop)}</div>'
+            f'<div class="crop-season">Season {CROP_SEASONS.get(crop, "")}</div>'
+            f'<div class="crop-chip">Cluster {cluster_id}</div>'
+            f'</div>'
         )
-    st.markdown(f'<section class="crop-strip"><div class="crop-head-title">Crop Deck</div><div class="crop-head-copy">A quick visual pass across the supported crops. The highlighted tile follows the crop currently selected in the app.</div><div class="crop-gallery">{"".join(cards)}</div></section>', unsafe_allow_html=True)
+    st.markdown(
+        f'<section class="crop-strip"><div class="crop-head-title">Crop Deck</div>'
+        f'<div class="crop-head-copy">15 French crops grouped into 4 agronomic clusters. '
+        f'The highlighted tile follows the crop currently selected in the app.</div>'
+        f'<div class="crop-gallery">{"".join(cards)}</div></section>',
+        unsafe_allow_html=True,
+    )
 
 
 def render_result(result: dict[str, Any]) -> None:
     decision = "Irrigation recommended" if result["irrigate"] else "No irrigation today"
+    cluster_id = result.get("cluster", "?")
+    cluster_name = result.get("cluster_name", "")
     st.markdown(
         f"""
         <div class="result-card">
@@ -283,6 +345,7 @@ def render_result(result: dict[str, Any]) -> None:
                 <div class="result-chip">Depth {result['amount_mm']:.2f} mm</div>
                 <div class="result-chip">Confidence {result['confidence'].title()}</div>
                 <div class="result-chip">Stage {result['growth_stage'].replace('_', ' ').title()}</div>
+                <div class="result-chip">Cluster {cluster_id} — {cluster_name}</div>
             </div>
         </div>
         """,
@@ -293,13 +356,27 @@ def render_result(result: dict[str, Any]) -> None:
     metric2.metric("Depth", f"{result['amount_mm']:.2f} mm")
     metric3.metric("Confidence", result["confidence"].title())
     metric4.metric("Growth Stage", result["growth_stage"].replace("_", " ").title())
-    st.caption(f"Location: {result['location']} | Weather: {result['weather_summary']} | Recommendation date: {result['recommendation_date']}")
+    st.caption(
+        f"Location: {result['location']} | Weather: {result['weather_summary']} | "
+        f"Recommendation date: {result['recommendation_date']}"
+    )
     weather = result["data_sources"]
     card_cols = st.columns(3)
-    labels = [("🌡 Temperature", f"{weather['temperature_2m_mean']:.1f} C"), ("💧 Humidity", f"{weather['relative_humidity_2m_mean']:.0f}%"), ("🌧 Rain", f"{weather['precipitation_sum']:.1f} mm"), ("☀ ET0", f"{weather['et0_fao_evapotranspiration']:.1f} mm/day"), ("🍃 Wind", f"{weather['wind_speed_10m_max']:.1f} km/h"), ("🌱 Soil Moisture", f"{weather['soil_moisture_0_to_7cm_mean']:.3f}")]
+    labels = [
+        ("🌡 Temperature", f"{weather['temperature_2m_mean']:.1f} C"),
+        ("💧 Humidity", f"{weather['relative_humidity_2m_mean']:.0f}%"),
+        ("🌧 Rain", f"{weather['precipitation_sum']:.1f} mm"),
+        ("☀ ET0", f"{weather['et0_fao_evapotranspiration']:.1f} mm/day"),
+        ("🍃 Wind", f"{weather['wind_speed_10m_max']:.1f} km/h"),
+        ("🌱 Soil Moisture", f"{weather['soil_moisture_0_to_7cm_mean']:.3f}"),
+    ]
     for index, (label, value) in enumerate(labels):
         with card_cols[index % 3]:
-            st.markdown(f'<div class="mini-card"><div class="metric-label">{label}</div><div class="metric-value">{value}</div></div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="mini-card"><div class="metric-label">{label}</div>'
+                f'<div class="metric-value">{value}</div></div>',
+                unsafe_allow_html=True,
+            )
     if weather.get("soil_moisture_source"):
         st.caption(f"Soil moisture source: {weather['soil_moisture_source']}")
     with st.expander("Raw recommendation payload"):
@@ -307,15 +384,17 @@ def render_result(result: dict[str, Any]) -> None:
 
 
 def render_steps(crop: str, growth_stage: str) -> None:
+    cluster_id = CROPS[crop]["cluster"]
+    cluster_name = CLUSTER_NAMES.get(cluster_id, f"Cluster {cluster_id}")
     st.markdown(
         f"""
         <div class="section-card">
             <div class="story-title">How AquaSmart Decides</div>
-            <div class="story-copy">Your active crop is <strong>{format_crop_name(crop)}</strong> and today's mapped field phase is <strong>{growth_stage.replace('_', ' ').title()}</strong>.</div>
+            <div class="story-copy">Your active crop is <strong>{format_crop_name(crop)}</strong>, mapped to <strong>{cluster_name}</strong>. Today's field phase is <strong>{growth_stage.replace('_', ' ').title()}</strong>.</div>
             <div class="step-card"><div class="step-label">Step 1</div><strong>Geocode the field city.</strong><br>AquaSmart resolves the location and fetches same-day weather from Open-Meteo.</div>
-            <div class="step-card"><div class="step-label">Step 2</div><strong>Detect crop stage.</strong><br>The French crop calendar maps the selected culture to its current field phase.</div>
-            <div class="step-card"><div class="step-label">Step 3</div><strong>Run the two-stage model.</strong><br>Classification answers should irrigate, then regression answers how much.</div>
-            <div class="step-card"><div class="step-label">Step 4</div><strong>Convert to liters.</strong><br>The model output in millimeters is converted using your field area.</div>
+            <div class="step-card"><div class="step-label">Step 2</div><strong>Detect crop stage & cluster.</strong><br>The sowing-month calendar maps the selected crop to its current phase, and the crop is routed to its agronomic cluster model.</div>
+            <div class="step-card"><div class="step-label">Step 3</div><strong>Build the feature vector.</strong><br>9 static features (weather + Kc + soil capacity) are combined with 7 temporal features (rolling water balance + irrigation history).</div>
+            <div class="step-card"><div class="step-label">Step 4</div><strong>Run the two-stage model.</strong><br>Classification answers "irrigate?", then regression answers "how much?" — the output mm are converted to liters using your field area.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -331,32 +410,12 @@ def render_operator_notes(runtime_error: str | None) -> None:
         - FastAPI mode calls `/recommend` on the configured backend URL.
         - If the crop is in a fallow period, AquaSmart intentionally returns zero irrigation.
         - Soil moisture prefers `0-7cm` live data and falls back to `0-1cm` when Open-Meteo does not expose the deeper band.
+        - Recent irrigation history is essential: models were trained with rolling 7/14-day irrigation sums.
         """,
     )
     if runtime_error:
         st.warning(f"Backend status check failed: {runtime_error}")
     st.markdown("</div>", unsafe_allow_html=True)
-
-
-def render_model_benchmarks(model_info: list[dict[str, Any]]) -> None:
-    st.subheader("Model Benchmarks")
-    if not model_info:
-        st.warning("No trained crop bundles are available yet, so the benchmark view is empty.")
-        return
-    frame = pd.DataFrame(model_info)
-    frame["crop_label"] = frame["crop_display"]
-    improvement_chart = px.bar(frame, x="crop_label", y="baseline_improvement", color="baseline_improvement", color_continuous_scale=["#d39e42", "#7ba14b", "#2f7ea0"], text_auto=".1f", labels={"crop_label": "", "baseline_improvement": "Improvement vs baseline (%)"})
-    improvement_chart.update_layout(margin=dict(l=10, r=10, t=20, b=10), coloraxis_showscale=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(255,255,255,0.74)")
-    score_chart = px.scatter(frame, x="classifier_f1", y="regressor_rmse", size="baseline_improvement", color="crop_label", text="crop_label", labels={"classifier_f1": "Classifier F1", "regressor_rmse": "Regressor RMSE"}, color_discrete_sequence=["#b9852f", "#7aa04b", "#4f9d68", "#3b86a6", "#7459a6"])
-    score_chart.update_traces(textposition="top center")
-    score_chart.update_layout(margin=dict(l=10, r=10, t=20, b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(255,255,255,0.74)", legend_title_text="Crop")
-    chart_col, table_col = st.columns((1.25, 1))
-    with chart_col:
-        st.plotly_chart(improvement_chart, use_container_width=True)
-        st.plotly_chart(score_chart, use_container_width=True)
-    with table_col:
-        table = frame[["crop_display", "classifier", "classifier_f1", "regressor", "regressor_rmse", "regressor_r2", "baseline_improvement"]].rename(columns={"crop_display": "Crop", "classifier": "Best classifier", "classifier_f1": "F1", "regressor": "Best regressor", "regressor_rmse": "RMSE", "regressor_r2": "R2", "baseline_improvement": "Improvement (%)"})
-        st.dataframe(table, use_container_width=True, hide_index=True, column_config={"F1": st.column_config.NumberColumn(format="%.4f"), "RMSE": st.column_config.NumberColumn(format="%.4f"), "R2": st.column_config.NumberColumn(format="%.4f"), "Improvement (%)": st.column_config.NumberColumn(format="%.1f")})
 
 
 def main() -> None:
@@ -371,66 +430,126 @@ def main() -> None:
         st.sidebar.success("Model cache cleared.")
 
     status, model_info, runtime_error = build_runtime_snapshot(runtime_mode, api_url)
-    loaded_count = len(status.get("loaded_crops", []))
-    total_count = status.get("crops_total", len(SUPPORTED_CROPS))
+    loaded_count = len(status.get("loaded_clusters", []))
+    total_count = status.get("clusters_total", 4)
     selected_crop = st.session_state.get("last_crop", "corn")
 
-    st.sidebar.markdown("### Coverage")
-    st.sidebar.markdown("\n".join([f"- {CROP_EMOJIS.get(crop, '🌱')} {format_crop_name(crop)}" for crop in SUPPORTED_CROPS]))
+    st.sidebar.markdown("### Coverage (15 crops)")
+    for crop in SORTED_CROPS:
+        cluster_id = CROPS[crop]["cluster"]
+        st.sidebar.markdown(
+            f"- {CROP_EMOJIS.get(crop, '🌱')} {format_crop_name(crop)} `C{cluster_id}`"
+        )
     st.sidebar.markdown("### Model Readiness")
-    st.sidebar.caption(f"{loaded_count}/{total_count} crop bundles available in the current runtime.")
-    if status.get("missing_crops"):
-        st.sidebar.caption("Missing: " + ", ".join(format_crop_name(crop) for crop in status["missing_crops"]))
+    st.sidebar.caption(f"{loaded_count}/{total_count} cluster bundles available in the current runtime.")
+    if status.get("missing_clusters"):
+        missing_ids = ", ".join(f"C{cid}" for cid in status["missing_clusters"])
+        st.sidebar.caption(f"Missing clusters: {missing_ids}")
 
     render_hero(runtime_mode, loaded_count, total_count, selected_crop)
     render_status_cards(status, runtime_mode, runtime_error)
     render_crop_showcase(selected_crop)
 
-    rec_tab, bench_tab = st.tabs(["Daily Recommendation", "Benchmarks"])
-    with rec_tab:
-        form_col, guide_col = st.columns((1.15, 0.85))
-        with form_col:
-            st.subheader("Request a Recommendation")
-            st.caption("The prediction engine is unchanged. Only the visual design has been upgraded.")
-            with st.form("recommendation_form", clear_on_submit=False):
-                city = st.text_input("City", value="Chartres", help="Closest city or town to the field.")
-                surface_hectares = st.number_input("Field size (hectares)", min_value=0.1, max_value=500.0, value=5.0, step=0.5)
-                crop = st.selectbox("Crop", SUPPORTED_CROPS, index=SUPPORTED_CROPS.index(selected_crop) if selected_crop in SUPPORTED_CROPS else 1, format_func=lambda key: f"{CROP_EMOJIS.get(key, '🌱')} {format_crop_name(key)}")
-                auto_stage = get_growth_stage(crop)
-                override_stage = st.toggle("Override auto-detected growth stage", value=False)
-                stage_name = None
-                if override_stage:
-                    stage_name = st.selectbox("Growth stage", list(GROWTH_STAGE_ENCODING.keys()), index=list(GROWTH_STAGE_ENCODING.keys()).index(auto_stage), format_func=lambda value: value.replace("_", " ").title())
-                else:
-                    st.caption(f"Auto stage for today: {auto_stage.replace('_', ' ').title()} for {format_crop_name(crop)}.")
-                submitted = st.form_submit_button("Generate smart irrigation plan", use_container_width=True)
+    form_col, guide_col = st.columns((1.15, 0.85))
+    with form_col:
+        st.subheader("Request a Recommendation")
+        st.caption(
+            "15 crops, 4 cluster models. The crop you pick is routed to its agronomic cluster automatically."
+        )
+        with st.form("recommendation_form", clear_on_submit=False):
+            city = st.text_input("City", value="Chartres", help="Closest city or town to the field.")
+            surface_hectares = st.number_input(
+                "Field size (hectares)", min_value=0.1, max_value=500.0, value=5.0, step=0.5
+            )
+            default_index = (
+                SORTED_CROPS.index(selected_crop) if selected_crop in SORTED_CROPS
+                else SORTED_CROPS.index("corn")
+            )
+            crop = st.selectbox(
+                "Crop",
+                SORTED_CROPS,
+                index=default_index,
+                format_func=format_crop_label,
+            )
+            auto_stage = get_growth_stage(crop)
+            override_stage = st.toggle("Override auto-detected growth stage", value=False)
+            stage_name: str | None = None
+            if override_stage:
+                stage_name = st.selectbox(
+                    "Growth stage",
+                    list(GROWTH_STAGE_ENCODING.keys()),
+                    index=list(GROWTH_STAGE_ENCODING.keys()).index(auto_stage),
+                    format_func=lambda value: value.replace("_", " ").title(),
+                )
+            else:
+                st.caption(
+                    f"Auto stage for today: {auto_stage.replace('_', ' ').title()} "
+                    f"for {format_crop_name(crop)}."
+                )
 
-            st.session_state["last_crop"] = crop
-            if submitted:
-                try:
-                    with st.spinner("Running weather fetch and crop-specific prediction..."):
-                        result = build_farmer_recommendation(city=city, surface_hectares=surface_hectares, crop=crop, growth_stage=stage_name) if runtime_mode == "Local engine" else recommendation_via_backend(api_url=api_url, city=city, surface_hectares=surface_hectares, crop=crop, growth_stage=stage_name)
-                    st.session_state["last_result"] = result
-                    st.session_state["last_crop"] = crop
-                    st.session_state["last_stage"] = result["growth_stage"]
-                except ModelNotReadyError as exc:
-                    st.error(f"{exc}\n\nTrain or restore the crop bundles under `models/<crop>/` before using local inference.")
-                except requests.HTTPError as exc:
-                    detail = exc.response.text if exc.response is not None else str(exc)
-                    st.error(f"The FastAPI backend returned an error: {detail}")
-                except requests.RequestException as exc:
-                    st.error(f"Network request failed: {exc}")
-                except Exception as exc:
-                    st.error(str(exc))
-            if "last_result" in st.session_state:
-                render_result(st.session_state["last_result"])
-        with guide_col:
-            current_crop = st.session_state.get("last_crop", SUPPORTED_CROPS[0])
-            current_stage = st.session_state.get("last_stage", get_growth_stage(current_crop))
-            render_steps(current_crop, current_stage)
-            render_operator_notes(runtime_error)
-    with bench_tab:
-        render_model_benchmarks(model_info)
+            with st.expander("🚿 Recent irrigation history (optional but recommended)", expanded=False):
+                st.caption(
+                    "The model was trained with rolling 7/14-day irrigation sums. "
+                    "Providing them improves accuracy, especially for repeat-recommendation scenarios."
+                )
+                irrigation_last_7d = st.number_input(
+                    "Irrigation applied in the last 7 days (mm)",
+                    min_value=0.0, max_value=200.0, value=0.0, step=5.0,
+                    help="Total millimeters irrigated on this field during the past week.",
+                )
+                irrigation_last_14d = st.number_input(
+                    "Irrigation applied in the last 14 days (mm)",
+                    min_value=0.0, max_value=400.0, value=0.0, step=5.0,
+                    help="Total millimeters over the past two weeks (≥ 7-day value).",
+                )
+                days_since_last_irrigation = st.number_input(
+                    "Days since last irrigation",
+                    min_value=0, max_value=30, value=30, step=1,
+                    help="How many days ago was the field last irrigated? Capped at 30.",
+                )
+
+            submitted = st.form_submit_button("Generate smart irrigation plan", use_container_width=True)
+
+        st.session_state["last_crop"] = crop
+        if submitted:
+            effective_14d = max(float(irrigation_last_14d), float(irrigation_last_7d))
+            try:
+                with st.spinner("Running weather fetch and cluster-specific prediction..."):
+                    call_kwargs = dict(
+                        city=city,
+                        surface_hectares=surface_hectares,
+                        crop=crop,
+                        growth_stage=stage_name,
+                        irrigation_last_7d=float(irrigation_last_7d),
+                        irrigation_last_14d=effective_14d,
+                        days_since_last_irrigation=float(days_since_last_irrigation),
+                    )
+                    if runtime_mode == "Local engine":
+                        result = build_farmer_recommendation(**call_kwargs)
+                    else:
+                        result = recommendation_via_backend(api_url=api_url, **call_kwargs)
+                st.session_state["last_result"] = result
+                st.session_state["last_crop"] = crop
+                st.session_state["last_stage"] = result["growth_stage"]
+            except ModelNotReadyError as exc:
+                st.error(
+                    f"{exc}\n\nTrain the cluster bundles under `models/cluster_<N>/` "
+                    "before using local inference."
+                )
+            except requests.HTTPError as exc:
+                detail = exc.response.text if exc.response is not None else str(exc)
+                st.error(f"The FastAPI backend returned an error: {detail}")
+            except requests.RequestException as exc:
+                st.error(f"Network request failed: {exc}")
+            except Exception as exc:  # noqa: BLE001
+                st.error(str(exc))
+        if "last_result" in st.session_state:
+            render_result(st.session_state["last_result"])
+    with guide_col:
+        current_crop = st.session_state.get("last_crop", SORTED_CROPS[0])
+        current_stage = st.session_state.get("last_stage", get_growth_stage(current_crop))
+        render_steps(current_crop, current_stage)
+        render_operator_notes(runtime_error)
 
 
 if __name__ == "__main__":

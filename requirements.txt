@@ -1,34 +1,32 @@
 # AquaSmart — Python Dependencies
+# Python 3.11 recommended. Install with: pip install -r requirements.txt
 
-# === Data & ML Core ===
-pandas>=2.2.0
-numpy>=1.26.0
-scikit-learn>=1.5.0
-scipy>=1.13.0
+# === Data manipulation & ML core ===
+pandas>=2.2.0,<3.0
+numpy>=1.26.0,<2.0
+scikit-learn>=1.5.0,<2.0
+scipy>=1.13.0,<2.0
+joblib>=1.4.0
 
-# === Visualization ===
+# === Visualisation (used in Streamlit app + notebooks) ===
+plotly>=5.22.0
 matplotlib>=3.9.0
 seaborn>=0.13.0
-plotly>=5.22.0
 
-# === Notebooks ===
-jupyter>=1.0.0
-ipykernel>=6.29.0
+# === Dashboard (farmer-facing UI) ===
+streamlit>=1.36.0
 
-# === API & Dashboard ===
+# === HTTP & external APIs (Open-Meteo, geocoding) ===
+requests>=2.32.0
+
+# === Optional FastAPI backend ===
 fastapi>=0.111.0
 uvicorn>=0.30.0
-streamlit>=1.36.0
+
+# === Notebooks (EDA) ===
+jupyter>=1.0.0
+ipykernel>=6.29.0
 
 # === Utilities ===
 python-dotenv>=1.0.0
 pyyaml>=6.0.0
-joblib>=1.4.0
-requests>=2.32.0
-
-# === Testing ===
-pytest>=8.2.0
-
-# === Data Sources (Phase 2) ===
-# cdsapi>=0.7.0
-# openmeteo-requests>=1.0

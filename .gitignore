@@ -13,6 +13,11 @@ env/
 # Jupyter
 .ipynb_checkpoints/
 
+# Reports
+reports/figures/**/*.png
+reports/figures/*.png
+reports/**/*.zip
+
 # Data (too large for git)
 data/raw/*.csv
 data/raw/*.xlsx

@@ -1,0 +1,58 @@
+# AquaSmart — Docker build exclusions
+# Keep the image small and reproducible.
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Raw / processed data (mounted as volumes instead)
+data/raw/
+data/processed/
+data/external/
+data/baselines/
+
+# Pre-trained model artefacts (mounted as volumes instead)
+models/
+
+# Reports (generated, not part of the image)
+reports/figures/*.png
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Docker files themselves (no recursion needed)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Documentation
+README.md
+LICENSE
+reports/*.md
+reports/*.pdf
+
+# Tests (not shipped)
+tests/
